@@ -70,7 +70,7 @@ class Feeder(torch.utils.data.Dataset):
 				[[cos_angle, -sin_angle],
 				[sin_angle, cos_angle]])
 
-			xy = now_feature[3:5, :, :]
+			xy = now_feature[3:5, :, :] # should index xCenter and yCenter
 			num_xy = np.sum(xy.sum(axis=0).sum(axis=0) != 0) # get the number of valid data
 
 			# angle_mat: (2, 2), xy: (2, 12, 120)
@@ -78,7 +78,7 @@ class Feeder(torch.utils.data.Dataset):
 			now_mean_xy = np.matmul(angle_mat, now_mean_xy)
 			xy[:,:,:num_xy] = out_xy[:,:,:num_xy]
 
-			now_feature[3:5, :, :] = xy
+			now_feature[3:5, :, :] = xy # should index xCenter and yCenter
 
 		now_adjacency = self.graph.get_adjacency(self.all_adjacency[idx])
 		now_A = self.graph.normalize_adjacency(now_adjacency)

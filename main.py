@@ -1,4 +1,5 @@
 import argparse
+from concurrent.futures import process
 import os 
 import sys
 import numpy as np 
@@ -9,8 +10,11 @@ from xin_feeder_baidu import Feeder
 from datetime import datetime
 import random
 import itertools
+import angelos
+import data_process
+import extract_ind_traj
 
-CUDA_VISIBLE_DEVICES='1'
+CUDA_VISIBLE_DEVICES=''
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
 
 def seed_torch(seed=0):
@@ -26,16 +30,16 @@ seed_torch()
 
 max_x = 1. 
 max_y = 1. 
-history_frames = 6 # 3 second * 2 frame/second
-future_frames = 6 # 3 second * 2 frame/second
+history_frames = 8 # 3 second * 2 frame/second
+future_frames = 12 # 3 second * 2 frame/second
 
 batch_size_train = 64 
 batch_size_val = 32
 batch_size_test = 1
-total_epoch = 50
+total_epoch = 30
 base_lr = 0.01
 lr_decay_epoch = 5
-dev = 'cuda:0' 
+dev = 'cpu'#cuda:0' 
 work_dir = './trained_models'
 log_file = os.path.join(work_dir,'log_test.txt')
 test_result_file = 'prediction_result.txt'
@@ -84,14 +88,16 @@ def data_loader(pra_path, pra_batch_size=128, pra_shuffle=False, pra_drop_last=F
 		batch_size=pra_batch_size,
 		shuffle=pra_shuffle,
 		drop_last=pra_drop_last, 
-		num_workers=10,
+		num_workers=0,
 		)
 	return loader
 	
 def preprocess_data(pra_data, pra_rescale_xy):
 	# pra_data: (N, C, T, V)
 	# C = 11: [frame_id, object_id, object_type, position_x, position_y, position_z, object_length, pbject_width, pbject_height, heading] + [mask]	
-	feature_id = [3, 4, 9, 10]
+	# Angelos: ['recordingId','frame','originalObjectId','xCenter','yCenter','heading','locationId','objectId','mask']
+	#feature_id = [3, 4, 9, 10] 
+	feature_id = [3, 4, 5, 8] 
 	ori_data = pra_data[:,feature_id].detach()
 	data = ori_data.detach().clone()
 
@@ -130,12 +136,14 @@ def train_model(pra_model, pra_data_loader, pra_optimizer, pra_epoch_log):
 	rescale_xy[:,1] = max_y
 
 	# train model using training data
-	for iteration, (ori_data, A, _) in enumerate(pra_data_loader):
+	n_iterations = len(pra_data_loader)
+	for iteration, (ori_data, A, _) in enumerate(pra_data_loader): 
 		# print(iteration, ori_data.shape, A.shape)
 		# ori_data: (N, C, T, V)
 		# C = 11: [frame_id, object_id, object_type, position_x, position_y, position_z, object_length, pbject_width, pbject_height, heading] + [mask]
 		data, no_norm_loc_data, object_type = preprocess_data(ori_data, rescale_xy)
-		for now_history_frames in range(1, data.shape[-2]):
+		#for now_history_frames in range(1, data.shape[-2]):
+		for now_history_frames in [8]: # for each data[n] there is only one now_history_frame. If the loop is not restricted, then the training data is different from the training data used in AMEnet and DCEnet. More data will be used here.
 			input_data = data[:,:,:now_history_frames,:] # (N, C, T, V)=(N, 4, 6, 120)
 			output_loc_GT = data[:,:2,now_history_frames:,:] # (N, C, T, V)=(N, 2, 6, 120)
 			output_mask = data[:,-1:,now_history_frames:,:] # (N, C, T, V)=(N, 1, 6, 120)
@@ -154,7 +162,8 @@ def train_model(pra_model, pra_data_loader, pra_optimizer, pra_epoch_log):
 			total_loss = torch.sum(overall_sum_time) / torch.max(torch.sum(overall_num), torch.ones(1,).to(dev)) #(1,)
 
 			now_lr = [param_group['lr'] for param_group in pra_optimizer.param_groups][0]
-			my_print('|{}|{:>20}|\tIteration:{:>5}|\tLoss:{:.8f}|lr: {}|'.format(datetime.now(), pra_epoch_log, iteration, total_loss.data.item(),now_lr))
+			#my_print('|{}|{:>20}|\tIteration:{:>5}|\tLoss:{:.8f}|lr: {}|'.format(datetime.now(), pra_epoch_log, iteration, total_loss.data.item(),now_lr))
+			my_print(f'|{datetime.now()}|{pra_epoch_log:>20}|\tIteration:{iteration+1:>5}/{n_iterations}|\tLoss:{total_loss.data.item():.8f}|lr: {now_lr}|')
 			
 			pra_optimizer.zero_grad()
 			total_loss.backward()
@@ -181,6 +190,7 @@ def val_model(pra_model, pra_data_loader):
 	for iteration, (ori_data, A, _) in enumerate(pra_data_loader):
 		# data: (N, C, T, V)
 		# C = 11: [frame_id, object_id, object_type, position_x, position_y, position_z, object_length, pbject_width, pbject_height, heading] + [mask]
+		# Angelos: ['recordingId','frame','originalObjectId','xCenter','yCenter','heading','locationId','objectId','mask']
 		data, no_norm_loc_data, _ = preprocess_data(ori_data, rescale_xy)
 
 		for now_history_frames in range(6, 7):
@@ -274,6 +284,7 @@ def test_model(pra_model, pra_data_loader):
 		for iteration, (ori_data, A, mean_xy) in enumerate(pra_data_loader):
 			# data: (N, C, T, V)
 			# C = 11: [frame_id, object_id, object_type, position_x, position_y, position_z, object_length, pbject_width, pbject_height, heading] + [mask]
+			# Angelos: ['recordingId','frame','originalObjectId','xCenter','yCenter','heading','locationId','objectId','mask']
 			data, no_norm_loc_data, _ = preprocess_data(ori_data, rescale_xy)
 			input_data = data[:,:,:history_frames,:] # (N, C, T, V)=(N, 4, 6, 120)
 			output_mask = data[:,-1,-1,:] # (N, V)=(N, 120)
@@ -304,61 +315,95 @@ def test_model(pra_model, pra_data_loader):
 				num_object = np.sum(n_mask).astype(int)
 				# only use the last time of original data for ids (frame_id, object_id, object_type)
 				# (6, 120, 11) -> (num_object, 3)
-				n_dat = n_data[-1, :num_object, :3].astype(int)
+				#n_dat = n_data[-1, :num_object, :3].astype(int)
+				n_dat = n_data[-1, :num_object, [0,1,2,6,7]].astype(int).T
 				for time_ind, n_pre in enumerate(n_pred[:, :num_object], start=1):
 					# (120, 2) -> (n, 2)
 					# print(n_dat.shape, n_pre.shape)
 					for info, pred in zip(n_dat, n_pre+n_mean_xy):
 						information = info.copy()
-						information[0] = information[0] + time_ind
+						information[1] = information[1] + 10*time_ind # factor 10 due to downsampling
 						result = ' '.join(information.astype(str)) + ' ' + ' '.join(pred.astype(str)) + '\n'
 						# print(result)
 						writer.write(result)
 
 
 def run_trainval(pra_model, pra_traindata_path, pra_testdata_path):
-	loader_train = data_loader(pra_traindata_path, pra_batch_size=batch_size_train, pra_shuffle=True, pra_drop_last=True, train_val_test='train')
-	loader_test = data_loader(pra_testdata_path, pra_batch_size=batch_size_train, pra_shuffle=True, pra_drop_last=True, train_val_test='all')
+	#loader_train = data_loader(pra_traindata_path, pra_batch_size=batch_size_train, pra_shuffle=True, pra_drop_last=True, train_val_test='train')
+	loader_train = data_loader(pra_traindata_path, pra_batch_size=batch_size_train, pra_shuffle=True, pra_drop_last=True, train_val_test='all')
+	#loader_test = data_loader(pra_testdata_path, pra_batch_size=batch_size_train, pra_shuffle=True, pra_drop_last=True, train_val_test='all')
 
 	# evaluate on testing data (observe 5 frame and predict 1 frame)
-	loader_val = data_loader(pra_traindata_path, pra_batch_size=batch_size_val, pra_shuffle=False, pra_drop_last=False, train_val_test='val') 
+	#loader_val = data_loader(pra_traindata_path, pra_batch_size=batch_size_val, pra_shuffle=False, pra_drop_last=False, train_val_test='val') 
 	
 	optimizer = optim.Adam(
 		[{'params':model.parameters()},],) # lr = 0.0001)
 		
-	for now_epoch in range(total_epoch):
-		all_loader_train = itertools.chain(loader_train, loader_test)
+	for now_epoch in range(1,total_epoch+1):
+		#all_loader_train = itertools.chain(loader_train, loader_test)
 		
 		my_print('#######################################Train')
-		train_model(pra_model, all_loader_train, pra_optimizer=optimizer, pra_epoch_log='Epoch:{:>4}/{:>4}'.format(now_epoch, total_epoch))
+		#train_model(pra_model, all_loader_train, pra_optimizer=optimizer, pra_epoch_log='Epoch:{:>4}/{:>4}'.format(now_epoch, total_epoch))
+		train_model(pra_model, loader_train, pra_optimizer=optimizer, pra_epoch_log='Epoch:{:>4}/{:>4}'.format(now_epoch, total_epoch))
 		
-		my_save_model(pra_model, now_epoch)
+		if now_epoch%10 == 0:
+			my_save_model(pra_model, now_epoch)
 
-		my_print('#######################################Test')
-		display_result(
-			val_model(pra_model, loader_val),
-			pra_pref='{}_Epoch{}'.format('Test', now_epoch)
-		)
+#		my_print('#######################################Test')
+#		display_result(
+#			val_model(pra_model, loader_val),
+#			pra_pref='{}_Epoch{}'.format('Test', now_epoch)
+#		)
 
+	# TODO: In data_process.process_data the means of xCenter and yCenter are 
+	# 		deducted per recordingId. When I run tests then I have to add
+	#		the means again. This appears to be handled already by test_model
+	# 		and xin_feeder_baidu.Feeder.__getitem__.
 
 def run_test(pra_model, pra_data_path):
-	loader_test = data_loader(pra_data_path, pra_batch_size=batch_size_test, pra_shuffle=False, pra_drop_last=False, train_val_test='test')
+	loader_test = data_loader(pra_data_path, pra_batch_size=batch_size_test, pra_shuffle=False, pra_drop_last=False, train_val_test='all')
 	test_model(pra_model, loader_test)
 
 
 
 if __name__ == '__main__':
+
+	process_raw_data = False
+	generate_data = False
+	case = 'eval'
+	locationIds = [1,2,3,4]
+	#locationIds = [1]
+
+	if process_raw_data:
+		extract_ind_traj.main()
+	
+	if generate_data == True:
+		print('Generating Training Data.')
+		data_process.generate_data(pra_file_path_list=['train'], pra_is_train=True,locationIds=locationIds)
+		print('Generating Testing Data.')
+		data_process.generate_data(pra_file_path_list=['test'], pra_is_train=False,locationIds=locationIds)
+
+
 	graph_args={'max_hop':2, 'num_node':120}
 	model = Model(in_channels=4, graph_args=graph_args, edge_importance_weighting=True)
 	model.to(dev)
 
-	# train and evaluate model
-	run_trainval(model, pra_traindata_path='./train_data.pkl', pra_testdata_path='./test_data.pkl')
 	
-	# pretrained_model_path = './trained_models/model_epoch_0016.pt'
-	# model = my_load_model(model, pretrained_model_path)
-	# run_test(model, './test_data.pkl')
-	
+	if case == 'train':
+		# train and evaluate model
+		run_trainval(model, pra_traindata_path='./train_data.pkl', pra_testdata_path='./test_data.pkl')
+	elif case == 'test': 
+		pretrained_model_path = './trained_models/model_epoch_0050_train_with_all_locations.pt'
+		#pretrained_model_path = './trained_models/model_epoch_0030_train_only_on_location1.pt'
+		model = my_load_model(model, pretrained_model_path)
+		run_test(model, './test_data.pkl')
+	elif 'eval': # requires having run case=='test'
+		recordingIds = []
+		for locId in locationIds:
+			recordingIds.extend(angelos.RECORDING_ID_TEST[locId])
+		angelos.evaluate_GRIP(recordingIds)
+
+		
 		
 		
 
