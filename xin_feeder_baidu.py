@@ -36,11 +36,11 @@ class Feeder(torch.utils.data.Dataset):
 		# # last 20% data as validation set
 		self.train_val_test = train_val_test
 
-		if train_val_test.lower() == 'train':
+		if train_val_test.lower() == 'train': # Angelos: never entered since train_val_test = all is used
 			self.all_feature = self.all_feature[train_id_list]
 			self.all_adjacency = self.all_adjacency[train_id_list]
 			self.all_mean_xy = self.all_mean_xy[train_id_list]
-		elif train_val_test.lower() == 'val':
+		elif train_val_test.lower() == 'val': # Angelos: never entered since train_val_test = all is used
 			self.all_feature = self.all_feature[val_id_list]
 			self.all_adjacency = self.all_adjacency[val_id_list]
 			self.all_mean_xy = self.all_mean_xy[val_id_list]
@@ -61,24 +61,29 @@ class Feeder(torch.utils.data.Dataset):
 		now_feature = self.all_feature[idx].copy() # (C, T, V) = (11, 12, 120)
 		now_mean_xy = self.all_mean_xy[idx].copy() # (2,) = (x, y) 
 
-		if self.train_val_test.lower() == 'train' and np.random.random()>0.5:
-			angle = 2 * np.pi * np.random.random()
-			sin_angle = np.sin(angle)
-			cos_angle = np.cos(angle)
+		# Angelos: The code appears to generate artificial training data by 
+		# 	manipulating the training data. It is reasonable to skip this 
+		# 	because the other algorithms are not provided the same artificial 
+		# 	training data.
 
-			angle_mat = np.array(
-				[[cos_angle, -sin_angle],
-				[sin_angle, cos_angle]])
-
-			xy = now_feature[3:5, :, :] # should index xCenter and yCenter
-			num_xy = np.sum(xy.sum(axis=0).sum(axis=0) != 0) # get the number of valid data
-
-			# angle_mat: (2, 2), xy: (2, 12, 120)
-			out_xy = np.einsum('ab,btv->atv', angle_mat, xy)
-			now_mean_xy = np.matmul(angle_mat, now_mean_xy)
-			xy[:,:,:num_xy] = out_xy[:,:,:num_xy]
-
-			now_feature[3:5, :, :] = xy # should index xCenter and yCenter
+#		if self.train_val_test.lower() == 'train' and np.random.random()>0.5: 
+#			angle = 2 * np.pi * np.random.random()
+#			sin_angle = np.sin(angle)
+#			cos_angle = np.cos(angle)
+#
+#			angle_mat = np.array(
+#				[[cos_angle, -sin_angle],
+#				[sin_angle, cos_angle]])
+#
+#			xy = now_feature[3:5, :, :] # should index xCenter and yCenter
+#			num_xy = np.sum(xy.sum(axis=0).sum(axis=0) != 0) # get the number of valid data
+#
+#			# angle_mat: (2, 2), xy: (2, 12, 120)
+#			out_xy = np.einsum('ab,btv->atv', angle_mat, xy)
+#			now_mean_xy = np.matmul(angle_mat, now_mean_xy)
+#			xy[:,:,:num_xy] = out_xy[:,:,:num_xy]
+#
+#			now_feature[3:5, :, :] = xy # should index xCenter and yCenter
 
 		now_adjacency = self.graph.get_adjacency(self.all_adjacency[idx])
 		now_A = self.graph.normalize_adjacency(now_adjacency)

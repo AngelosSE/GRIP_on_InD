@@ -13,6 +13,8 @@ import itertools
 import angelos
 import data_process
 import extract_ind_traj
+import pandas
+import pathlib
 
 CUDA_VISIBLE_DEVICES=''
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
@@ -137,7 +139,9 @@ def train_model(pra_model, pra_data_loader, pra_optimizer, pra_epoch_log):
 
 	# train model using training data
 	n_iterations = len(pra_data_loader)
-	for iteration, (ori_data, A, _) in enumerate(pra_data_loader): 
+	for iteration, (ori_data, A, debug_mean_xy) in enumerate(pra_data_loader): 
+		if (iteration == 0) or (iteration == 10): # randombly selected iterations
+			sanity_check_training_data(ori_data,debug_mean_xy,case='train')
 		# print(iteration, ori_data.shape, A.shape)
 		# ori_data: (N, C, T, V)
 		# C = 11: [frame_id, object_id, object_type, position_x, position_y, position_z, object_length, pbject_width, pbject_height, heading] + [mask]
@@ -169,7 +173,26 @@ def train_model(pra_model, pra_data_loader, pra_optimizer, pra_epoch_log):
 			total_loss.backward()
 			pra_optimizer.step()
 
-		
+
+def sanity_check_training_data(ori_data,mean_xy,case):
+	debug_ori_data = pandas.DataFrame(ori_data[0,:,:,0].numpy().T,columns=['recordingId','frame','originalObjectId','xCenter','yCenter','heading','locationId','objectId','mask'])
+	tmp = []
+	for locId in [1,2,3,4]:
+		tmp.extend(angelos.RECORDING_ID_TEST[locId])
+	if case == 'train':
+		recIds = list(set.difference(set(range(33)),tmp))
+	elif case == 'test':
+		recIds = tmp
+	objectId = debug_ori_data.loc[debug_ori_data.index[0],'objectId']
+	ori_data_MY = angelos.load_data(pathlib.Path('trajectories_InD'),recIds) # All training trajectories must be loaded, otherwise the objectId will be incorrect since it depends on the number of loaded recordings.
+	ori_data_MY = ori_data_MY[ori_data_MY['objectId']==objectId]
+	ori_data_MY = ori_data_MY[['recordingId','frame','originalObjectId','xCenter','yCenter','heading','locationId','objectId']]
+	ori_data_MY = ori_data_MY.to_numpy()
+	ori_data_MY[:,[3,4]] = ori_data_MY[:,[3,4]] - mean_xy.numpy()[0]
+	if case == 'train':
+		assert(np.all(np.isclose(ori_data_MY,ori_data[0,:8,:,0].numpy().T))) # ori_data_MY does not contain mask hence pick only first 8
+	elif case =='test':
+		assert(np.all(np.isclose(ori_data_MY[:history_frames,:],ori_data[0,:8,:,0].numpy().T))) # ori_data_MY does not contain mask hence pick only first 8
 
 def val_model(pra_model, pra_data_loader):
 	# pra_model.to(dev)
@@ -282,6 +305,8 @@ def test_model(pra_model, pra_data_loader):
 	with open(test_result_file, 'w') as writer:
 		# train model using training data
 		for iteration, (ori_data, A, mean_xy) in enumerate(pra_data_loader):
+			if (iteration == 0) or (iteration == 10): # randombly selected iterations
+				sanity_check_training_data(ori_data,mean_xy,case='test')
 			# data: (N, C, T, V)
 			# C = 11: [frame_id, object_id, object_type, position_x, position_y, position_z, object_length, pbject_width, pbject_height, heading] + [mask]
 			# Angelos: ['recordingId','frame','originalObjectId','xCenter','yCenter','heading','locationId','objectId','mask']
@@ -373,6 +398,8 @@ if __name__ == '__main__':
 	case = 'eval'
 	locationIds = [1,2,3,4]
 	#locationIds = [1]
+
+	pathlib.Path.mkdir(pathlib.Path('trajectories_InD'),exist_ok=True)
 
 	if process_raw_data:
 		extract_ind_traj.main()
