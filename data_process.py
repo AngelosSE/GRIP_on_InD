@@ -95,7 +95,7 @@ def process_data(pra_now_dict, pra_start_ind, pra_end_ind, pra_observed_last,rec
 
 	#now_all_object_id = set([val for x in range(pra_start_ind, pra_end_ind) for val in pra_now_dict[recordingId,x].keys()])
 	now_all_object_id = []
-	for x in range(pra_start_ind, pra_end_ind,10): # step 10 because frames have been downsampled
+	for x in range(pra_start_ind, pra_end_ind,10): # step 10 because frames have been downsampled, the keys in now_dict depends on the sampling rate. See get_frame_instance_dict_angelos
 		for val in pra_now_dict[recordingId,x,objectId].keys():
 			now_all_object_id.append(val)
 	now_all_object_id = set(now_all_object_id)
@@ -157,7 +157,7 @@ def generate_train_data(pra_file_path,locationIds):
 #		all_mean_list.append(mean_xy)	
 	for objectId,object in df.groupby('objectId'): # In AMEnet and DCEnet the number of training data is equal to the number of trajectories in the dataset, hence N = 4273 if all locations are used for training data
 		start_ind = object['frame'].min()
-		end_ind = object['frame'].max()+10
+		end_ind = object['frame'].max()+10 # Plus 10 due to downsampling and use of range in rows 98 and 109 in process_data. For examples, range(0,190+10,1) = [0,10,20,.190], so the end_value must be 10
 		observed_last = np.sort(object['frame'].to_numpy())[7]
 		recordingId = object['recordingId'].iloc[0]
 		object_frame_feature, neighbor_matrix, mean_xy = process_data(
@@ -201,7 +201,7 @@ def generate_test_data(pra_file_path,locationIds):
 #		all_mean_list.append(mean_xy)
 	for objectId,object in df.groupby('objectId'):
 		start_ind = object['frame'].min()
-		end_ind = np.sort(object['frame'].to_numpy())[8]
+		end_ind = np.sort(object['frame'].to_numpy())[8] # Here there is no plus 10 because I pick the 8th element rather than the 7th, in process_data it is desired to construct x+[0,10,20,...70]
 		observed_last = np.sort(object['frame'].to_numpy())[7]
 		recordingId = object['recordingId'].iloc[0]
 		object_frame_feature, neighbor_matrix, mean_xy = process_data(
